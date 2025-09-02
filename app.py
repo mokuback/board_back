@@ -1,15 +1,13 @@
-# board_back/app.py
 import os
 from flask import Flask, jsonify
 from flask_cors import CORS
+from sqlalchemy import text, inspect
 from utils.config import Config
 from utils.database import Database
 from routes.auth import auth_bp
 from routes.messages import messages_bp
 from utils.logger import logger
-
-# 导入模型以确保它们被注册到 Base.metadata 中
-from models import User, Message
+from models import Base
 
 def create_app():
     app = Flask(__name__)
@@ -27,6 +25,14 @@ def create_app():
     # 初始化数据库
     db = Database()
     
+    # 添加数据库连接检查
+    try:
+        with db.engine.connect() as conn:
+            logger.info("Database connection successful")
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        return None
+    
     # 创建表（如果不存在）
     Base.metadata.create_all(db.engine)
     
@@ -36,14 +42,42 @@ def create_app():
     # 健康检查端点
     @app.route('/api/health')
     def health_check():
-        return jsonify({
-            'status': 'healthy',
-            'message': 'API is running'
-        })
-    
+        try:
+            # 测试数据库连接
+            db = Database()
+            with db.engine.connect() as conn:
+                # 执行简单查询测试连接
+                conn.execute(text("SELECT 1"))
+                
+                # 如果是本地环境，获取所有表名
+                tables = []
+                if Config.DEBUG:  # 本地环境判断
+                    inspector = inspect(db.engine)
+                    tables = inspector.get_table_names()
+                    
+                response = {
+                    'status': 'healthy',
+                    'message': 'API is running',
+                    'database': 'connected'
+                }
+                
+                if tables:
+                    response['tables'] = tables
+                    
+                return jsonify(response)
+        except Exception as e:
+            return jsonify({
+                'status': 'unhealthy',
+                'message': 'Database connection failed',
+                'error': str(e)
+            }), 500
+
     logger.info("Application initialized successfully")
     return app
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=Config.DEBUG, host='0.0.0.0', port=5000)
+    if app:  # 添加应用创建成功检查
+        app.run(debug=Config.DEBUG, host='0.0.0.0', port=5000)
+    else:
+        logger.error("Failed to create application")
