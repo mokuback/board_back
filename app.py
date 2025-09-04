@@ -71,6 +71,15 @@ def create_app():
                 'message': 'Database connection failed',
                 'error': str(e)
             }), 500
+        
+    # 在健康检查端点之后添加
+    @app.route('/api/test')
+    def test_server():
+        """测试 web 服务器是否正常运行"""
+        return jsonify({
+            'status': 'ok',
+            'message': 'Web server is running'
+        })        
 
     logger.info("Application initialized successfully")
     return app
