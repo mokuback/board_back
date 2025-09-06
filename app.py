@@ -86,7 +86,7 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    if app:  # 添加应用创建成功检查
-        app.run(debug=Config.DEBUG, host='0.0.0.0', port=5000)
+    if app:
+        app.run(host='0.0.0.0', port=5000)
     else:
         logger.error("Failed to create application")
