@@ -1,12 +1,8 @@
 from flask import Blueprint, request, jsonify
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 import jwt
 from services.auth_service import AuthService
-from utils.auth import token_required
 from utils.config import Config
-
-# 在实际应用中，这个密钥应该保存在环境变量中
-SECRET_KEY = "your-secret-key"
 
 auth_bp = Blueprint('auth', __name__)
 auth_service = AuthService()
@@ -15,27 +11,27 @@ auth_service = AuthService()
 def login():
     """用户登录"""
     data = request.get_json()
-    if not data or 'password' not in data:
+    if not data or 'username' not in data or 'password' not in data:
         return jsonify({
             'success': False,
-            'message': '密码不能为空'
+            'message': '用户名和密码不能为空'
         }), 400
-    password = data['password']
-    if auth_service.authenticate(password):
-        # 生成JWT令牌
-        token = jwt.encode({
-            'exp': datetime.now(timezone.utc) + timedelta(hours=24),
-            'iat': datetime.now(timezone.utc)
-        }, Config.SECRET_KEY, algorithm="HS256")  # 使用 Config.SECRET_KEY
 
-        
+    username = data['username']
+    password = data['password']
+    
+    # 使用AuthService进行认证
+    auth_result = auth_service.authenticate(username, password)
+    
+    if auth_result['success']:
         return jsonify({
             'success': True,
-            'token': token,
+            'token': auth_result['token'],
+            'user': auth_result['user'],
             'message': '登录成功'
         })
     else:
         return jsonify({
             'success': False,
-            'message': '密码错误'
+            'message': auth_result['message']
         }), 401

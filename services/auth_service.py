@@ -1,12 +1,10 @@
-# board_back/services/auth_service.py
-from services.base_service import BaseService
-from utils.logger import logger
 from werkzeug.security import check_password_hash
-from utils.config import Config
 from models import User
+from utils.logger import logger
+from datetime import datetime, timezone, timedelta
 import jwt
-from datetime import datetime, timedelta
-import uuid
+from utils.config import Config
+from .base_service import BaseService
 
 class AuthService(BaseService):
     def authenticate(self, username: str, password: str):
@@ -25,7 +23,8 @@ class AuthService(BaseService):
                         'token': token,
                         'user': {
                             'id': user.id,
-                            'username': user.username
+                            'username': user.username,
+                            'is_admin': user.is_admin
                         }
                     }
                 
@@ -39,24 +38,22 @@ class AuthService(BaseService):
                 'success': False,
                 'message': '认证过程中发生错误'
             }
-    
-    def _generate_token(self, user_id: str) -> str:
+
+    def _generate_token(self, user_id: int) -> str:
         """生成JWT令牌"""
         payload = {
             'user_id': user_id,
-            'exp': datetime.utcnow() + timedelta(hours=24),  # 令牌有效期24小时
-            'iat': datetime.utcnow()
+            'exp': datetime.now(timezone.utc) + timedelta(hours=24),
+            'iat': datetime.now(timezone.utc)
         }
-        return jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')
-    
+        return jwt.encode(payload, Config.SECRET_KEY, algorithm="HS256")
+
     def verify_token(self, token: str):
         """验证JWT令牌"""
         try:
-            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
-            return payload['user_id']
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            return payload
         except jwt.ExpiredSignatureError:
-            logger.warning("令牌已过期")
             return None
         except jwt.InvalidTokenError:
-            logger.warning("无效的令牌")
             return None
