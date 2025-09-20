@@ -29,9 +29,6 @@ app.add_middleware(
 
 security = HTTPBearer()
 
-# Vercel 需要的處理程序
-handler = app
-
 def check_config():
     required_vars = [
         "DATABASE_URL",
@@ -428,5 +425,4 @@ def health_check():
     return health_status
 
 # Vercel 需要的處理程序
-def handler(request):
-    return app(request.scope, receive=request.receive, send=request.send)
+handler = app
