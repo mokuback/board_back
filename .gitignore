@@ -1,10 +1,14 @@
-# Python
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# Python 缓存
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -16,12 +20,15 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
+# 虚拟环境
 venv/
+env/
 ENV/
 
 # IDE
@@ -30,17 +37,14 @@ ENV/
 *.swp
 *.swo
 
-# Environment variables
-.env
-
-# Logs
+# 日志文件
 *.log
 
-# Database
+# 本地数据库
 *.db
 *.sqlite3
 
-# Test coverage
+# 测试覆盖率
 htmlcov/
 .tox/
 .coverage
@@ -51,39 +55,11 @@ coverage.xml
 *.cover
 .hypothesis/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
 # pyenv
 .python-version
 
-# celery
-celerybeat-schedule
-celerybeat.pid
+# pytest
+.pytest_cache/
 
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# 上传的文件
+uploads/

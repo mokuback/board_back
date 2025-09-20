@@ -1,0 +1,15 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+class Config:
+    SECRET_KEY = os.getenv("SECRET_KEY")
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    LINE_MESSAGING_CHANNEL_ID = os.getenv("LINE_MESSAGING_CHANNEL_ID")
+    LINE_MESSAGING_ACCESS_TOKEN = os.getenv("LINE_MESSAGING_ACCESS_TOKEN")
+    LINE_LOGIN_CHANNEL_ID = os.getenv("LINE_LOGIN_CHANNEL_ID")
+    LINE_LOGIN_CHANNEL_SECRET = os.getenv("LINE_LOGIN_CHANNEL_SECRET")
+    CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
+    CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
+    CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
