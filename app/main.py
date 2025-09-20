@@ -1,10 +1,3 @@
-# print("=== Environment Variables ===")
-# print(f"SECRET_KEY: {os.getenv('SECRET_KEY')}")
-# print(f"DATABASE_URL: {os.getenv('DATABASE_URL')}")
-# print(f"CLOUDINARY_CLOUD_NAME: {os.getenv('CLOUDINARY_CLOUD_NAME')}")
-# print("=============================")
-
-
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -426,3 +419,7 @@ def health_check():
         }
 
     return health_status
+
+# Vercel 需要的處理程序
+def handler(request):
+    return app(request.scope, receive=request.receive, send=request.send)
