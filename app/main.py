@@ -12,7 +12,11 @@ from .config import Config
 from . import models, schemas, crud, auth
 from .database import SessionLocal, engine
 
-app = FastAPI()
+app = FastAPI(
+    title="Message Board API",
+    description="A simple message board backend API",
+    version="1.0.0"    
+)
 
 # 配置 CORS 中间件
 app.add_middleware(

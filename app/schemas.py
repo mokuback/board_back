@@ -14,7 +14,7 @@ class User(UserBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class MessageBase(BaseModel):
     content: str
@@ -31,4 +31,4 @@ class Message(MessageBase):
     is_admin: bool 
 
     class Config:
-        orm_mode = True
+        from_attributes  = True
