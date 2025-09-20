@@ -7,10 +7,10 @@ from datetime import timedelta, datetime
 import time
 import requests
 from jose.exceptions import ExpiredSignatureError, JWTError
-from .config import Config
+from app.config import Config
 
-from . import models, schemas, crud, auth
-from .database import SessionLocal, engine
+from app import models, schemas, crud, auth
+from app.database import SessionLocal, engine
 
 app = FastAPI(
     title="Message Board API",
