@@ -29,6 +29,9 @@ app.add_middleware(
 
 security = HTTPBearer()
 
+# Vercel 需要的處理程序
+handler = app
+
 def check_config():
     required_vars = [
         "DATABASE_URL",
