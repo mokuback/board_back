@@ -36,7 +36,7 @@ def check_config():
         "LINE_MESSAGING_CHANNEL_ID",
         "LINE_MESSAGING_ACCESS_TOKEN", # LINE Messaging API
         "LINE_LOGIN_CHANNEL_ID",
-        "LINE_LOGIN_CHANNEL_SECRET" # LINE Login (LIFF)
+        "LINE_LOGIN_CHANNEL_SECRET", # LINE Login (LIFF)
         "CLOUDINARY_CLOUD_NAME",
         "CLOUDINARY_API_KEY",
         "CLOUDINARY_API_SECRET",
@@ -425,4 +425,5 @@ def health_check():
     return health_status
 
 # Vercel 需要的處理程序
-handler = app
+def handler(request):
+    return app(request.scope, receive=request.receive, send=request.send)
