@@ -14,6 +14,7 @@ class User(Base):
 
     messages = relationship("Message", back_populates="user")
     display_name = relationship("DisplayName", back_populates="user", uselist=False)
+    login_records = relationship("LoginRecord", back_populates="user")    
 
 class Message(Base):
     __tablename__ = "messages"
@@ -35,3 +36,13 @@ class DisplayName(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="display_name")
+
+class LoginRecord(Base):
+    __tablename__ = "login_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    login_datetime = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="login_records")
+

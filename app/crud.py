@@ -32,6 +32,13 @@ def create_user(db: Session, user: schemas.UserCreate):
     db.refresh(db_user)
     return db_user
 
+def create_login_record(db: Session, user_id: int):
+    login_record = models.LoginRecord(user_id=user_id)
+    db.add(login_record)
+    db.commit()
+    return login_record
+
+
 def get_messages(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.Message).order_by(models.Message.created_at.desc()).offset(skip).limit(limit).all()
 

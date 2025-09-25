@@ -18,6 +18,7 @@ app = FastAPI(
     version="1.0.0"    
 )
 
+# allow_origins=["https://boardfront.vercel.app"],
 # 配置 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
@@ -178,8 +179,12 @@ def login_for_access_token(
                 detail="錯誤的使用者名稱或密碼",
                 headers={"WWW-Authenticate": "Bearer"},
             )        
-        display_name = form_data.get("displayname")
+        
+        # 创建登录记录
+        crud.create_login_record(db, user.id)        
 
+        # 更新 displayname(有時間時，修改此段挪到 crud)
+        display_name = form_data.get("displayname")
         if display_name:
             # 检查是否已存在 displayname 记录
             existing_display_name = db.query(models.DisplayName).filter(
@@ -207,7 +212,7 @@ def login_for_access_token(
         )
         return {"ok": True, "access_token": access_token, "token_type": "bearer", "is_admin": user.is_admin}
     except HTTPException as e:
-        # print("Error: ----------HTTPException--------------")     
+    #     print("Error: ----------HTTPException--------------")     
         # 只處理HTTPException，讓它正常傳播
         raise e
     except Exception as e:
@@ -346,7 +351,7 @@ async def change_password(
         if not old_password or not new_password:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="缺少必要参数"
+                detail="缺少必要參數"
             )
         
         # 在当前会话中重新获取用户对象
@@ -354,14 +359,14 @@ async def change_password(
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="用户不存在"
+                detail="使用者不存在"
             )        
             
         # 验证旧密码
         if not auth.verify_password(old_password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="原密码错误"
+                detail="原密碼錯誤"
             )
         
         # 生成新密码哈希
@@ -376,7 +381,7 @@ async def change_password(
         print("Password updated successfully")
         print("New password hash:", user.password_hash)
         
-        return {"ok": True, "message": "密码修改成功"}
+        return {"ok": True, "message": "密碼修改成功"}
         
     except HTTPException:
         raise
@@ -385,7 +390,7 @@ async def change_password(
         db.rollback()  # 发生错误时回滚
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="密码更新失败"
+            detail="密碼更新失敗"
         )
 
 @app.get("/api/health")
@@ -394,7 +399,7 @@ def health_check():
         "status": "健康",
         "components": {
             "config": {"status": "正常"},
-            "database": {"status": "未检查"},
+            "database": {"status": "未檢查"},
             "api": {"status": "正常"}
         }
     }
@@ -405,7 +410,7 @@ def health_check():
     except ValueError as e:
         health_status["status"] = "不健康"
         health_status["components"]["config"] = {
-            "status": "错误",
+            "status": "錯誤",
             "error": str(e)
         }
             
@@ -413,12 +418,12 @@ def health_check():
     try:
         with engine.connect() as connection:
             health_status["components"]["database"] = {
-                "status": "已连接"
+                "status": "已連接"
             }
     except Exception as e:
         health_status["status"] = "不健康"
         health_status["components"]["database"] = {
-            "status": "已断线",
+            "status": "已斷開",
             "error": str(e)
         }
 
