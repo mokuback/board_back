@@ -23,6 +23,15 @@ class MessageBase(BaseModel):
 class MessageCreate(MessageBase):
     pass
 
+class LoginRecord(BaseModel):
+    id: int
+    user_id: int
+    login_datetime: datetime
+    display_name: str
+    
+    class Config:
+        orm_mode = True
+
 class Message(MessageBase):
     id: int
     created_at: datetime

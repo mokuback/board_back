@@ -378,8 +378,8 @@ async def change_password(
         db.commit()
         db.refresh(user)  # 刷新实例以获取更新后的数据
         
-        print("Password updated successfully")
-        print("New password hash:", user.password_hash)
+        # print("Password updated successfully")
+        # print("New password hash:", user.password_hash)
         
         return {"ok": True, "message": "密碼修改成功"}
         
@@ -392,6 +392,37 @@ async def change_password(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="密碼更新失敗"
         )
+    
+@app.get("/admin/login-records/", response_model=list[schemas.LoginRecord])
+def get_all_login_records(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db_with_retry())
+):
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="僅限管理員訪問"
+        )
+    
+    try:
+        records = db.query(models.LoginRecord).order_by(
+            models.LoginRecord.login_datetime.desc()
+        ).all()
+        
+        for record in records:
+            display_name = db.query(models.DisplayName).filter(
+                models.DisplayName.user_id == record.user_id
+            ).first()
+            record.display_name = display_name.displayname if display_name else "Anonymous"
+            
+        return records
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="獲取登入記錄失敗"
+        )
+
+
 
 @app.get("/api/health")
 def health_check():
