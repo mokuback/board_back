@@ -409,13 +409,21 @@ def get_all_login_records(
             models.LoginRecord.login_datetime.desc()
         ).all()
         
+        formatted_records = []
         for record in records:
             display_name = db.query(models.DisplayName).filter(
                 models.DisplayName.user_id == record.user_id
             ).first()
-            record.display_name = display_name.displayname if display_name else "Anonymous"
+
+            formatted_record = {
+                "id": record.id,
+                "user_id": record.user_id,
+                "login_datetime": record.login_datetime.isoformat(),  # 确保返回ISO格式
+                "display_name": display_name.displayname if display_name else "Anonymous"
+            }
+            formatted_records.append(formatted_record)
             
-        return records
+        return formatted_records
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
