@@ -184,8 +184,6 @@ async def login_for_access_token(
         # 创建登录记录
         crud.create_login_record(db, user.id)
 
-
-
         # 如果不是管理员，发送 LINE 通知
         if not user.is_admin:
 
@@ -205,8 +203,7 @@ async def login_for_access_token(
                 )
             except Exception as e:
                 print(f"LINE 通知發送失敗: {str(e)}")
-                # 不抛出异常，继续执行登录流程   
-       
+                # 不抛出异常，继续执行登录流程          
 
         # 更新 displayname(有時間時，修改此段挪到 crud)
         display_name = form_data.get("displayname")
@@ -321,6 +318,27 @@ async def create_message(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="留言新增失敗"
             )
+
+        # 如果不是管理员，发送 LINE 通知
+        if not current_user.is_admin:
+
+            # 異步執行
+            # asyncio.create_task(
+            #     send_line_notification(
+            #         user_id=Config.LINE_MESSAGING_ADMIN_ID,  # 假设 username 存储的是 LINE user id
+            #         message="使用者登入訊息系統"
+            #     )
+            # ) 
+
+            # 同步執行
+            try:
+                await send_line_notification(
+                    user_id=Config.LINE_MESSAGING_ADMIN_ID,
+                    message="使用者新增訊息"
+                )
+            except Exception as e:
+                print(f"LINE 通知發送失敗: {str(e)}")
+                # 不抛出异常，继续执行登录流程   
 
         return {
             "ok": True,
