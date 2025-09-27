@@ -199,12 +199,14 @@ async def login_for_access_token(
             # task = asyncio.create_task(simple_test_task())
             # print(f"已创建异步任务: {task}")                       
             # 创建异步任务发送通知
+            print("通知任务开始执行")
             asyncio.create_task(
                 send_line_notification(
                     user_id=Config.LINE_MESSAGING_ADMIN_ID,  # 假设 username 存储的是 LINE user id
                     message="使用者登入訊息系統"
                 )
-            )                
+            )       
+            print("通知任务結束執行")         
 
         # 更新 displayname(有時間時，修改此段挪到 crud)
         display_name = form_data.get("displayname")
