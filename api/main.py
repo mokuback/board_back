@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import timedelta, datetime
 import time
+import asyncio
 import requests
 from jose.exceptions import ExpiredSignatureError, JWTError
 from app.config import Config
-
+from app.line_service import send_line_notification
 from app import models, schemas, crud, auth
 from app.database import SessionLocal, engine
 
@@ -165,7 +166,7 @@ def read_root():
     return {"message": "Welcome to the Message Board API"}
 
 @app.post("/token")
-def login_for_access_token(
+async def login_for_access_token(
     form_data: dict, 
     db: Session = Depends(get_db_for_login())
 ):
@@ -181,7 +182,29 @@ def login_for_access_token(
             )        
         
         # 创建登录记录
-        crud.create_login_record(db, user.id)        
+        crud.create_login_record(db, user.id)
+
+
+
+        # 如果不是管理员，发送 LINE 通知
+        if not user.is_admin:
+            print('===asyncio.create_task START===')
+
+            # 创建一个简单的测试任务
+            # async def simple_test_task():
+            #     print("测试任务开始执行")
+            #     await asyncio.sleep(1)  # 模拟异步操作
+            #     print("测试任务执行完成")     
+
+            # task = asyncio.create_task(simple_test_task())
+            # print(f"已创建异步任务: {task}")                       
+            # 创建异步任务发送通知
+            asyncio.create_task(
+                send_line_notification(
+                    user_id=Config.LINE_MESSAGING_ADMIN_ID,  # 假设 username 存储的是 LINE user id
+                    message="使用者登入訊息系統"
+                )
+            )                
 
         # 更新 displayname(有時間時，修改此段挪到 crud)
         display_name = form_data.get("displayname")
@@ -244,7 +267,8 @@ def get_messages(
     db: Session = Depends(get_db_with_retry())
 ):
     try:
-        messages = db.query(models.Message).offset(skip).limit(limit).all()
+        messages = db.query(models.Message).order_by(models.Message.created_at.desc()).offset(skip).limit(limit).all()
+
         # 为每条消息添加display_name和is_admin
         for message in messages:
             user = db.query(models.User).filter(
@@ -378,9 +402,6 @@ async def change_password(
         db.commit()
         db.refresh(user)  # 刷新实例以获取更新后的数据
         
-        # print("Password updated successfully")
-        # print("New password hash:", user.password_hash)
-        
         return {"ok": True, "message": "密碼修改成功"}
         
     except HTTPException:
@@ -408,22 +429,14 @@ def get_all_login_records(
         records = db.query(models.LoginRecord).order_by(
             models.LoginRecord.login_datetime.desc()
         ).all()
-        
-        formatted_records = []
+
         for record in records:
             display_name = db.query(models.DisplayName).filter(
                 models.DisplayName.user_id == record.user_id
             ).first()
-
-            formatted_record = {
-                "id": record.id,
-                "user_id": record.user_id,
-                "login_datetime": record.login_datetime.isoformat(),  # 确保返回ISO格式
-                "display_name": display_name.displayname if display_name else "Anonymous"
-            }
-            formatted_records.append(formatted_record)
+            record.display_name = display_name.displayname if display_name else "Anonymous"
             
-        return formatted_records
+        return records
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

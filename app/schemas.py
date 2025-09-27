@@ -30,7 +30,7 @@ class LoginRecord(BaseModel):
     display_name: str
     
     class Config:
-        orm_mode = True
+        ofrom_attributes = True
 
 class Message(MessageBase):
     id: int
