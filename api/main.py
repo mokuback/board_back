@@ -188,25 +188,25 @@ async def login_for_access_token(
 
         # 如果不是管理员，发送 LINE 通知
         if not user.is_admin:
-            print('===asyncio.create_task START===')
 
-            # 创建一个简单的测试任务
-            # async def simple_test_task():
-            #     print("测试任务开始执行")
-            #     await asyncio.sleep(1)  # 模拟异步操作
-            #     print("测试任务执行完成")     
+            # 異步執行
+            # asyncio.create_task(
+            #     send_line_notification(
+            #         user_id=Config.LINE_MESSAGING_ADMIN_ID,  # 假设 username 存储的是 LINE user id
+            #         message="使用者登入訊息系統"
+            #     )
+            # ) 
 
-            # task = asyncio.create_task(simple_test_task())
-            # print(f"已创建异步任务: {task}")                       
-            # 创建异步任务发送通知
-            print("通知任务开始执行")
-            asyncio.create_task(
-                send_line_notification(
-                    user_id=Config.LINE_MESSAGING_ADMIN_ID,  # 假设 username 存储的是 LINE user id
+            # 同步執行
+            try:
+                await send_line_notification(
+                    user_id=Config.LINE_MESSAGING_ADMIN_ID,
                     message="使用者登入訊息系統"
                 )
-            )       
-            print("通知任务結束執行")         
+            except Exception as e:
+                print(f"LINE 通知發送失敗: {str(e)}")
+                # 不抛出异常，继续执行登录流程   
+       
 
         # 更新 displayname(有時間時，修改此段挪到 crud)
         display_name = form_data.get("displayname")
