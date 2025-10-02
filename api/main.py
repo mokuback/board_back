@@ -463,6 +463,73 @@ def get_all_login_records(
             detail="獲取登入記錄失敗"
         )
 
+@app.get("/tasks/all", response_model=dict)
+def get_all_task_data(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db_with_retry())
+):
+    """
+    获取所有任务相关数据，包括分类、项目和进度
+    需要有效的用户token
+    """
+    try:
+        print(f"=== categories ===")
+        # 获取所有分类
+        categories = db.query(models.TaskCategory).filter(
+            models.TaskCategory.user_id == current_user.id
+        ).all()
+        print(f"Found {len(categories)} categories")
+        
+        print(f"=== items ===")
+        # 获取所有项目
+        try:
+            items = db.query(models.TaskItem).filter(
+                models.TaskItem.user_id == current_user.id
+            ).all()
+            print(f"Found {len(items)} items")
+        except Exception as item_error:
+            print(f"Error fetching items: {str(item_error)}")
+            # 尝试不带用户过滤的查询
+            items = db.query(models.TaskItem).all()
+            print(f"Found {len(items)} items without user filter")
+        
+        print(f"=== progresses ===")
+        # 获取所有进度
+        try:
+            progresses = db.query(models.TaskProgress).filter(
+                models.TaskProgress.user_id == current_user.id
+            ).all()
+            print(f"Found {len(progresses)} progresses")
+        except Exception as progress_error:
+            print(f"Error fetching progresses: {str(progress_error)}")
+            # 尝试不带用户过滤的查询
+            progresses = db.query(models.TaskProgress).all()
+            print(f"Found {len(progresses)} progresses without user filter")
+        
+        # 将数据转换为字典格式，避免序列化问题
+        def model_to_dict(model):
+            if hasattr(model, '__table__'):
+                return {c.name: getattr(model, c.name) for c in model.__table__.columns}
+            return model
+        
+        # 转换数据
+        categories_data = [model_to_dict(category) for category in categories]
+        items_data = [model_to_dict(item) for item in items]
+        progresses_data = [model_to_dict(progress) for progress in progresses]
+        
+        # 返回组织好的数据
+        return {
+            "categories": categories_data,
+            "items": items_data,
+            "progresses": progresses_data
+        }
+    except Exception as e:
+        print(f'General error in get_all_task_data: {str(e)}')
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"獲取任務數據失敗: {str(e)}"
+        )
+
 
 
 @app.get("/api/health")

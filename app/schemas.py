@@ -41,3 +41,57 @@ class Message(MessageBase):
 
     class Config:
         from_attributes  = True
+
+# 工作分类相关模式
+class TaskCategoryBase(BaseModel):
+    category_name: str
+    content: str
+
+class TaskCategoryCreate(TaskCategoryBase):
+    pass
+
+class TaskCategory(TaskCategoryBase):
+    id: int
+    user_id: int
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+# 类别项目相关模式
+class TaskItemBase(BaseModel):
+    item_name: str
+    content: str
+    item_at: Optional[datetime] = None
+
+class TaskItemCreate(TaskItemBase):
+    category_id: int
+
+class TaskItem(TaskItemBase):
+    id: int
+    category_id: int
+    user_id: int
+    item_at: datetime
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+# 项目进度相关模式
+class TaskProgressBase(BaseModel):
+    progress_name: str
+    content: str
+    progress_at: Optional[datetime] = None
+
+class TaskProgressCreate(TaskProgressBase):
+    item_id: int
+
+class TaskProgress(TaskProgressBase):
+    id: int
+    item_id: int
+    user_id: int
+    progress_at: datetime
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True        
