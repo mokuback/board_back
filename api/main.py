@@ -1101,10 +1101,7 @@ async def test_send_user(
         }
 
         # 发送给用户的数据
-        data = {
-            "message": message_data,
-            "type": task_notify_service.LINE_NOTIFY
-        }
+        data = {"message": message_data, "type": 'line_notify'}
 
         # 发送通知
         await send_user(user_id, data)
