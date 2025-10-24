@@ -21,26 +21,52 @@ from app.connections import connections
 
 task_notify_service = None
 
+# python 3.7 + 才支持************************************************
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # 启动时执行
+#     global task_notify_service
+#     db = SessionLocal()
+#     task_notify_service = TaskNotify(db)
+#     asyncio.create_task(task_notify_service.start())
+#     yield
+#     # 关闭时执行
+#     if task_notify_service:
+#         task_notify_service.stop()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 启动时执行
-    global task_notify_service
-    db = SessionLocal()
-    task_notify_service = TaskNotify(db)
-    asyncio.create_task(task_notify_service.start())
-    yield
-    # 关闭时执行
-    if task_notify_service:
-        task_notify_service.stop()
-
+# app = FastAPI(
+#     title="Message Board API",
+#     description="A simple message board backend API",
+#     version="1.0.0",
+#     lifespan=lifespan,
+# )
+# ******************************************************************
 
 app = FastAPI(
     title="Message Board API",
     description="A simple message board backend API",
     version="1.0.0",
-    lifespan=lifespan,
+    # lifespan=lifespan,
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化服务"""
+    global task_notify_service
+    db = SessionLocal()
+    task_notify_service = TaskNotify(db)
+    asyncio.create_task(task_notify_service.start())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时清理服务"""
+    global task_notify_service
+    if task_notify_service:
+        task_notify_service.stop()
+        task_notify_service = None
+
 
 # allow_origins=["https://boardfront.vercel.app"],
 # 配置 CORS 中间件
@@ -1036,6 +1062,11 @@ async def test_send_to_user(
     current_user: models.User = Depends(get_current_user)):
     """测试向指定用户发送通知"""
     try:
+        if not task_notify_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="通知服务未初始化")
+
         # 验证是否为管理员
         if not current_user.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
