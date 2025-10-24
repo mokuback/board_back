@@ -1055,18 +1055,32 @@ async def sse_endpoint(token: str = None,
                             detail="SSE 连接失败")
 
 
+async def send_user(user_id: int, data: Dict):
+    """
+    向特定用户的所有连接队列发送数据
+    
+    参数:
+        user_id: 用户ID
+        data: 要发送的数据字典
+    """
+
+    # 检查用户ID是否存在于connections字典中
+    if user_id in connections:  # 验证用户是否有活跃连接
+        # 遍历该用户的所有连接队列
+        # for queue in connections[user_id]:  # 对每个用户连接进行处理
+        for device_id, queue in connections[user_id].items():
+            print(f"向用户 ID: {user_id} (设备ID: {device_id})")
+            # 将数据异步放入队列
+            await queue.put(data)  # 使用异步方式将数据放入队列
+
+
 @app.post("/test/send-to-user/{user_id}")
-async def test_send_to_user(
+async def test_send_user(
     user_id: int,
     data: dict,  # 接收 JSON 数据
     current_user: models.User = Depends(get_current_user)):
     """测试向指定用户发送通知"""
     try:
-        if not task_notify_service:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="通知服务未初始化")
-
         # 验证是否为管理员
         if not current_user.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -1076,13 +1090,6 @@ async def test_send_to_user(
         category_id = data.get('category_id')
         item_id = data.get('item_id')
         progress_id = data.get('progress_id')
-
-        # 获取进度详细信息
-        details = task_notify_service.get_progress_details(
-            category_id, item_id, progress_id)
-        if not details:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="找不到指定的分类、项目或进度")
 
         # 构造消息数据
         message_data = {
@@ -1100,7 +1107,7 @@ async def test_send_to_user(
         }
 
         # 发送通知
-        await task_notify_service.send_to_user(user_id, data)
+        await send_user(user_id, data)
 
         return {"message": f"已向用户 {user_id} 发送测试通知"}
     except HTTPException:
