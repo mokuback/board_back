@@ -293,3 +293,100 @@ def delete_task_progress(db: Session, progress_id: int, user_id: int):
     db.commit()
 
     return db_progress
+
+
+# 此函數不分user_id，所以不檢查
+def get_progress_details(db: Session, category_id: int, item_id: int,
+                         progress_id: int):
+    """获取分类、项目和进度的详细信息"""
+    try:
+        # 查询分类
+        category = db.query(models.TaskCategory).filter(
+            models.TaskCategory.id == category_id).first()
+
+        # 查询项目
+        item = db.query(
+            models.TaskItem).filter(models.TaskItem.id == item_id).first()
+
+        # 查询进度
+        progress = db.query(models.TaskProgress).filter(
+            models.TaskProgress.id == progress_id).first()
+
+        # 如果任何一个ID不存在，返回None
+        if not category or not item or not progress:
+            return None
+
+        # 返回所需信息
+        return {
+            "category_name": category.category_name,
+            "item_name": item.item_name,
+            "progress_name": progress.progress_name,
+            "progress_content": progress.content
+        }
+    except Exception as e:
+        print(f"Error getting progress details: {str(e)}")
+        return None
+
+
+def create_task_notify(db: Session, notify: schemas.TaskNotifyCreate,
+                       user_id: int):
+    """创建新的任务通知"""
+    db_notify = models.TaskNotify(user_id=user_id,
+                                  category_id=notify.category_id,
+                                  item_id=notify.item_id,
+                                  progress_id=notify.progress_id,
+                                  start_at=notify.start_at,
+                                  stop_at=notify.stop_at,
+                                  run_mode=notify.run_mode,
+                                  run_code=notify.run_code,
+                                  time_at=notify.time_at,
+                                  week_at=notify.week_at)
+    db.add(db_notify)
+    db.commit()
+    db.refresh(db_notify)
+    return db_notify
+
+
+def update_task_notify(db: Session, notify_id: int,
+                       notify: schemas.TaskNotifyUpdate, user_id: int):
+    """更新任务通知"""
+    # 查找通知
+    db_notify = db.query(models.TaskNotify).filter(
+        models.TaskNotify.id == notify_id,
+        models.TaskNotify.user_id == user_id).first()
+    if not db_notify:
+        return None
+
+    # 更新通知信息
+    if notify.start_at is not None:
+        db_notify.start_at = notify.start_at
+    if notify.stop_at is not None:
+        db_notify.stop_at = notify.stop_at
+    if notify.run_mode is not None:
+        db_notify.run_mode = notify.run_mode
+    if notify.run_code is not None:
+        db_notify.run_code = notify.run_code
+    if notify.time_at is not None:
+        db_notify.time_at = notify.time_at
+    if notify.week_at is not None:
+        db_notify.week_at = notify.week_at
+
+    db_notify.last_executed = None
+
+    db.commit()
+    db.refresh(db_notify)
+    return db_notify
+
+
+def delete_task_notify(db: Session, notify_id: int, user_id: int):
+    """删除任务通知"""
+    # 查找通知
+    db_notify = db.query(models.TaskNotify).filter(
+        models.TaskNotify.id == notify_id,
+        models.TaskNotify.user_id == user_id).first()
+    if not db_notify:
+        return None
+    # 删除通知
+    db.delete(db_notify)
+    db.commit()
+    return db_notify

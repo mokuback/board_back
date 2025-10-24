@@ -6,16 +6,41 @@ from sqlalchemy import func
 from datetime import timedelta, datetime
 import time
 import asyncio
-import requests
+from typing import Dict, List
 from jose.exceptions import ExpiredSignatureError, JWTError
 from app.config import Config
 from app.line_service import send_line_notification
 from app import models, schemas, crud, auth
 from app.database import SessionLocal, engine
+from app.task_notify import TaskNotify
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Message Board API",
-              description="A simple message board backend API",
-              version="1.0.0")
+from fastapi.responses import StreamingResponse
+import json
+from app.connections import connections
+
+task_notify_service = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时执行
+    global task_notify_service
+    db = SessionLocal()
+    task_notify_service = TaskNotify(db)
+    asyncio.create_task(task_notify_service.start())
+    yield
+    # 关闭时执行
+    if task_notify_service:
+        task_notify_service.stop()
+
+
+app = FastAPI(
+    title="Message Board API",
+    description="A simple message board backend API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 # allow_origins=["https://boardfront.vercel.app"],
 # 配置 CORS 中间件
@@ -41,6 +66,7 @@ def check_config():
         "CLOUDINARY_CLOUD_NAME",
         "CLOUDINARY_API_KEY",
         "CLOUDINARY_API_SECRET",
+        "LOCALE",
     ]
 
     missing_vars = [
@@ -442,6 +468,28 @@ def get_all_login_records(
                             detail="獲取登入記錄失敗")
 
 
+@app.post("/admin/update-notify-list/")
+async def update_notify_list(
+        current_user: models.User = Depends(get_current_user),
+        db: Session = Depends(get_db_with_retry())):
+    """更新后端通知列表"""
+    try:
+        # 验证是否为管理员
+        if not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="僅限管理員訪問")
+
+        # 直接使用全局实例刷新通知列表
+        await task_notify_service.refresh_notifies()
+
+        return {"message": "通知列表已更新"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"更新通知列表失败: {str(e)}")
+
+
 @app.get("/tasks/all", response_model=dict)
 def get_all_task_data(current_user: models.User = Depends(get_current_user),
                       db: Session = Depends(get_db_with_retry())):
@@ -451,9 +499,15 @@ def get_all_task_data(current_user: models.User = Depends(get_current_user),
     """
     try:
         print(f"=== categories ===")
-        # 获取所有分类
+        # 获取所有分类(未排序)
+        # categories = db.query(models.TaskCategory).filter(
+        #     models.TaskCategory.user_id == current_user.id).all()
+
+        # 获取所有分类(按分類名稱排序)
         categories = db.query(models.TaskCategory).filter(
-            models.TaskCategory.user_id == current_user.id).all()
+            models.TaskCategory.user_id == current_user.id).order_by(
+                models.TaskCategory.category_name).all()
+
         print(f"Found {len(categories)} categories")
 
         print(f"=== items ===")
@@ -480,6 +534,17 @@ def get_all_task_data(current_user: models.User = Depends(get_current_user),
             progresses = db.query(models.TaskProgress).all()
             print(f"Found {len(progresses)} progresses without user filter")
 
+        print(f"=== notifies ===")
+        # 获取所有通知
+        try:
+            notifies = db.query(models.TaskNotify).filter(
+                models.TaskNotify.user_id == current_user.id).all()
+            print(f"Found {len(notifies)} notifies")
+        except Exception as notify_error:
+            print(f"Error fetching notifies: {str(notify_error)}")
+            notifies = []
+            print(f"Found {len(notifies)} notifies without user filter")
+
         # 将数据转换为字典格式，避免序列化问题
         def model_to_dict(model):
             if hasattr(model, '__table__'):
@@ -493,12 +558,20 @@ def get_all_task_data(current_user: models.User = Depends(get_current_user),
         categories_data = [model_to_dict(category) for category in categories]
         items_data = [model_to_dict(item) for item in items]
         progresses_data = [model_to_dict(progress) for progress in progresses]
+        notifies_data = [model_to_dict(notify) for notify in notifies]
 
         # 返回组织好的数据
         return {
             "categories": categories_data,
             "items": items_data,
-            "progresses": progresses_data
+            "progresses": progresses_data,
+            "notifies": notifies_data,
+            "task_notify_service": {
+                "running":
+                task_notify_service._running if task_notify_service else False,
+                "count":
+                len(task_notify_service.notifies) if task_notify_service else 0
+            }
         }
     except Exception as e:
         print(f'General error in get_all_task_data: {str(e)}')
@@ -716,6 +789,328 @@ def delete_progress(progress_id: int,
         print(f"Error deleting progress: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"刪除進度失敗: {str(e)}")
+
+
+@app.post("/token/refresh")
+async def refresh_token(current_user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db_with_retry())):
+    try:
+        access_token_expires = timedelta(
+            minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = auth.create_access_token(
+            data={"sub": current_user.username},
+            expires_delta=access_token_expires)
+        return {
+            "ok": True,
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": auth.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        }
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Token refresh failed")
+
+
+@app.put("/progresses/{progress_id}/status")
+def update_progress_status(
+    progress_id: int,
+    status_data: dict,
+    db: Session = Depends(get_db_with_retry()),
+    current_user: models.User = Depends(get_current_user)):
+    """更新任务进度的状态"""
+    try:
+        # 查找进度
+        db_progress = db.query(models.TaskProgress).filter(
+            models.TaskProgress.id == progress_id,
+            models.TaskProgress.user_id == current_user.id).first()
+
+        # 如果进度不存在，返回 404 错误
+        if not db_progress:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="進度不存在或無權限修改")
+
+        # 更新状态
+        db_progress.status = status_data.get("status", 0)
+        db.commit()
+        db.refresh(db_progress)
+
+        return {"ok": True, "message": "狀態更新成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating progress status: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"更新狀態失敗: {str(e)}")
+
+
+@app.get("/progress/details")
+def get_progress(category_id: int,
+                 item_id: int,
+                 progress_id: int,
+                 db: Session = Depends(get_db_with_retry())):
+    """获取分类、项目和进度的详细信息"""
+    try:
+        progress_details = crud.get_progress_details(db=db,
+                                                     category_id=category_id,
+                                                     item_id=item_id,
+                                                     progress_id=progress_id)
+
+        if not progress_details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="找不到指定的分類、項目或進度")
+
+        return progress_details
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting progress details: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"獲取進度詳情失敗: {str(e)}")
+
+
+@app.post("/notifies/", response_model=schemas.TaskNotify)
+def create_notify(
+        notify: schemas.TaskNotifyCreate,
+        db: Session = Depends(get_db_with_retry()),
+        current_user: models.User = Depends(get_current_user),
+):
+    """创建新的任务通知"""
+    try:
+        return crud.create_task_notify(db=db,
+                                       notify=notify,
+                                       user_id=current_user.id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"新增通知失敗: {str(e)}")
+
+
+@app.put("/notifies/{notify_id}", response_model=schemas.TaskNotify)
+def update_notify(notify_id: int,
+                  notify: schemas.TaskNotifyUpdate,
+                  db: Session = Depends(get_db_with_retry()),
+                  current_user: models.User = Depends(get_current_user)):
+    """更新任务通知"""
+    try:
+        # 调用 CRUD 函数更新通知
+        updated_notify = crud.update_task_notify(db=db,
+                                                 notify_id=notify_id,
+                                                 notify=notify,
+                                                 user_id=current_user.id)
+
+        # 如果通知不存在，返回 404 错误
+        if not updated_notify:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="通知不存在或無權限修改")
+
+        return updated_notify
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 记录错误日志
+        print(f"Error updating notify: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"更新通知失敗: {str(e)}")
+
+
+@app.delete("/notifies/{notify_id}")
+def delete_notify(notify_id: int,
+                  db: Session = Depends(get_db_with_retry()),
+                  current_user: models.User = Depends(get_current_user)):
+    """删除任务通知"""
+    try:
+        # 调用 CRUD 函数删除通知
+        deleted_notify = crud.delete_task_notify(db=db,
+                                                 notify_id=notify_id,
+                                                 user_id=current_user.id)
+
+        if not deleted_notify:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="找不到要刪除的通知")
+
+        return {"ok": True, "message": "通知刪除成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting notify: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"刪除通知失敗: {str(e)}")
+
+
+# 添加获取短期 SSE token 的端点
+@app.post("/sse/token")
+async def get_sse_token(current_user: models.User = Depends(get_current_user)):
+    """生成短期 SSE token"""
+    try:
+        # 生成短期 token（5分钟有效期）
+        token = auth.create_access_token(data={"sub": current_user.username},
+                                         expires_delta=timedelta(minutes=5))
+        return {"token": token}
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="生成 SSE token 失败")
+
+
+@app.get("/sse/notify")
+@app.get("/sse/notify")
+async def sse_endpoint(token: str = None,
+                       device_id: str = None,
+                       db: Session = Depends(get_db_for_login())):
+    try:
+        # 验证必要参数
+        if not token or not device_id:
+            raise HTTPException(status_code=401,
+                                detail="Missing token or device_id")
+
+        # 验证token
+        username = auth.verify_token(token)
+        current_user = crud.get_user_by_username(db, username=username)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        print(f"SSE连接成功 - User ID: {current_user.id}")
+
+        # 关闭该设备的旧连接
+        if current_user.id in connections:
+            if device_id in connections[current_user.id]:
+                old_queue = connections[current_user.id][device_id]
+                await old_queue.put(None)  # 发送关闭信号
+
+        # 创建新连接
+        queue = asyncio.Queue()
+        if current_user.id not in connections:
+            connections[current_user.id] = {}
+        connections[current_user.id][device_id] = queue
+
+        async def event_generator():
+            try:
+                while True:
+                    try:
+                        data = await queue.get()
+                        if data is None:  # 收到关闭信号
+                            break
+                        yield f"data: {json.dumps(data)}\n\n"
+                        print(f"发送给用户 {current_user.id} 的通知: {data}")
+                    except Exception as e:
+                        print(f"处理队列消息时发生错误: {str(e)}")
+                        continue
+            except asyncio.CancelledError:
+                print(f"用户 {current_user.id} 断开连接")
+                # 清理连接
+                if current_user.id in connections:
+                    if device_id in connections[current_user.id]:
+                        del connections[current_user.id][device_id]
+                    if not connections[current_user.id]:
+                        del connections[current_user.id]
+                raise
+            except Exception as e:
+                print(f"SSE连接发生错误: {str(e)}")
+                raise
+            finally:
+                # 确保连接被清理
+                if current_user.id in connections:
+                    if device_id in connections[current_user.id]:
+                        del connections[current_user.id][device_id]
+                    if not connections[current_user.id]:
+                        del connections[current_user.id]
+
+        return StreamingResponse(event_generator(),
+                                 media_type="text/event-stream",
+                                 headers={
+                                     "Cache-Control": "no-cache",
+                                     "Connection": "keep-alive",
+                                     "X-Accel-Buffering": "no"
+                                 })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="SSE 连接失败")
+
+
+@app.post("/test/send-to-user/{user_id}")
+async def test_send_to_user(
+    user_id: int,
+    data: dict,  # 接收 JSON 数据
+    current_user: models.User = Depends(get_current_user)):
+    """测试向指定用户发送通知"""
+    try:
+        # 验证是否为管理员
+        if not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="仅限管理员访问")
+
+        # 从 JSON 数据中获取参数
+        category_id = data.get('category_id')
+        item_id = data.get('item_id')
+        progress_id = data.get('progress_id')
+
+        # 获取进度详细信息
+        details = task_notify_service.get_progress_details(
+            category_id, item_id, progress_id)
+        if not details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="找不到指定的分类、项目或进度")
+
+        # 构造消息数据
+        message_data = {
+            "id": 1,  # 测试ID
+            "category_id": category_id,
+            "item_id": item_id,
+            "progress_id": progress_id,
+            "last_executed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # 发送给用户的数据
+        data = {
+            "message": message_data,
+            "type": task_notify_service.LINE_NOTIFY
+        }
+
+        # 发送通知
+        await task_notify_service.send_to_user(user_id, data)
+
+        return {"message": f"已向用户 {user_id} 发送测试通知"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"发送测试通知失败: {str(e)}")
+
+
+@app.post("/admin/task-notify/control")
+async def control_task_notify(
+    enabled: bool, current_user: models.User = Depends(get_current_user)):
+    """控制任务通知服务的启动和停止"""
+    try:
+        # 验证是否为管理员
+        if not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="仅限管理员访问")
+
+        global task_notify_service
+
+        if enabled:
+            # 启动服务
+            if not task_notify_service or not task_notify_service._running:
+                db = SessionLocal()
+                task_notify_service = TaskNotify(db)
+                asyncio.create_task(task_notify_service.start())
+            return {"message": "任务通知服务已启动", "running": True}
+        else:
+            # 停止服务
+            if task_notify_service:
+                task_notify_service.stop()
+                task_notify_service = None
+                print(' STOP task_notify_service')
+            return {"message": "任务通知服务已停止", "running": False}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"控制任务通知服务失败: {str(e)}")
 
 
 @app.get("/api/health")
