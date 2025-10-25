@@ -91,7 +91,7 @@ def check_config():
         "CLOUDINARY_CLOUD_NAME",
         "CLOUDINARY_API_KEY",
         "CLOUDINARY_API_SECRET",
-        "LOCALE",
+        "TIMEZONE",
     ]
 
     missing_vars = [
