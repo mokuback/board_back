@@ -1054,25 +1054,6 @@ async def sse_endpoint(token: str = None,
                             detail="SSE 连接失败")
 
 
-async def send_user(user_id: int, data: Dict):
-    """
-    向特定用户的所有连接队列发送数据
-    
-    参数:
-        user_id: 用户ID
-        data: 要发送的数据字典
-    """
-
-    # 检查用户ID是否存在于connections字典中
-    if user_id in connections:  # 验证用户是否有活跃连接
-        # 遍历该用户的所有连接队列
-        # for queue in connections[user_id]:  # 对每个用户连接进行处理
-        for device_id, queue in connections[user_id].items():
-            print(f"向用户 ID: {user_id} (设备ID: {device_id})")
-            # 将数据异步放入队列
-            await queue.put(data)  # 使用异步方式将数据放入队列
-
-
 @app.post("/test/send-to-user/{user_id}")
 async def test_send_user(
     user_id: int,
@@ -1085,14 +1066,20 @@ async def test_send_user(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="仅限管理员访问")
 
+        # 检查 task_notify_service 是否启动
+        if not task_notify_service or not task_notify_service._running:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="任务通知服务未启动")
+
         # 从 JSON 数据中获取参数
+        notify_id = data.get('notify_id')
         category_id = data.get('category_id')
         item_id = data.get('item_id')
         progress_id = data.get('progress_id')
 
         # 构造消息数据
         message_data = {
-            "id": 1,  # 测试ID
+            "id": notify_id,
             "category_id": category_id,
             "item_id": item_id,
             "progress_id": progress_id,
@@ -1102,10 +1089,10 @@ async def test_send_user(
         # 发送给用户的数据
         data = {"message": message_data, "type": 'line_notify'}
 
-        # 发送通知
-        await send_user(user_id, data)
+        # 使用 task_notify_service 发送通知
+        await task_notify_service.send_to_user(user_id, data)
 
-        return {"message": f"已向用户 {user_id} 发送测试通知"}
+        return {"message": f"已向用户 {user_id} 发送 {data} 测试通知"}
     except HTTPException:
         raise
     except Exception as e:
