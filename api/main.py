@@ -102,6 +102,33 @@ def check_config():
         raise ValueError(f"缺少必要的環境變數： {', '.join(missing_vars)}")
 
 
+def get_token_user(
+        credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """从token中获取用户信息"""
+    try:
+        token = credentials.credentials
+        username, user_id = auth.verify_token(token)
+        if username is None or user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return {"username": username, "user_id": user_id}
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="無法驗證憑證",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 def get_db_for_login(max_retries=3, delay=1):
     """用于登录的数据库连接，不需要token验证"""
 
@@ -142,7 +169,7 @@ def get_db_with_retry(max_retries=3, delay=1):
         # 验证 token
         try:
             token = credentials.credentials
-            username = auth.verify_token(token)
+            username, user_id = auth.verify_token(token)
             if username is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -195,7 +222,7 @@ def get_current_user(
         db: Session = Depends(get_db_with_retry())):
     try:
         token = credentials.credentials
-        username = auth.verify_token(token)
+        username, user_id = auth.verify_token(token)
         user = crud.get_user_by_username(db, username=username)
         if user is None:
             raise HTTPException(
@@ -241,12 +268,10 @@ async def login_for_access_token(form_data: dict,
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # 创建登录记录
-        crud.create_login_record(db, user.id)
-
         # 如果不是管理员，发送 LINE 通知
         if not user.is_admin:
-
+            # 创建登录记录
+            crud.create_login_record(db, user.id)
             # 異步執行
             # asyncio.create_task(
             #     send_line_notification(
@@ -286,7 +311,11 @@ async def login_for_access_token(form_data: dict,
         access_token_expires = timedelta(
             minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = auth.create_access_token(
-            data={"sub": user.username}, expires_delta=access_token_expires)
+            data={
+                "sub": user.username,
+                "user_id": user.id
+            },
+            expires_delta=access_token_expires)
         return {
             "ok": True,
             "access_token": access_token,
@@ -817,13 +846,15 @@ def delete_progress(progress_id: int,
 
 
 @app.post("/token/refresh")
-async def refresh_token(current_user: dict = Depends(get_current_user),
-                        db: Session = Depends(get_db_with_retry())):
+async def refresh_token(current_sse_user: dict = Depends(get_token_user)):
     try:
         access_token_expires = timedelta(
             minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = auth.create_access_token(
-            data={"sub": current_user.username},
+            data={
+                "sub": current_sse_user["username"],
+                "user_id": current_sse_user["user_id"]
+            },
             expires_delta=access_token_expires)
         return {
             "ok": True,
@@ -965,48 +996,43 @@ def delete_notify(notify_id: int,
 
 # 添加获取短期 SSE token 的端点
 @app.post("/sse/token")
-async def get_sse_token(current_user: models.User = Depends(get_current_user)):
+async def get_sse_token(current_sse_user: dict = Depends(get_token_user)):
     """生成短期 SSE token"""
     try:
         # 生成短期 token（5分钟有效期）
-        token = auth.create_access_token(data={"sub": current_user.username},
-                                         expires_delta=timedelta(minutes=5))
-        return {"token": token}
+        sse_token = auth.create_access_token(
+            data={
+                "sub": current_sse_user["username"],
+                "user_id": current_sse_user["user_id"]
+            },
+            expires_delta=timedelta(minutes=5))
+        return {"sse_token": sse_token}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="生成 SSE token 失败")
 
 
 @app.get("/sse/notify")
-@app.get("/sse/notify")
-async def sse_endpoint(token: str = None,
-                       device_id: str = None,
-                       db: Session = Depends(get_db_for_login())):
+async def sse_endpoint(sse_token: str = None, device_id: str = None):
     try:
         # 验证必要参数
-        if not token or not device_id:
+        if not sse_token or not device_id:
             raise HTTPException(status_code=401,
                                 detail="Missing token or device_id")
-
-        # 验证token
-        username = auth.verify_token(token)
-        current_user = crud.get_user_by_username(db, username=username)
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        print(f"SSE连接成功 - User ID: {current_user.id}")
+        username, user_id = auth.verify_token(sse_token)
+        print(f"SSE连接成功 - User ID: {user_id}, Username: {username}")
 
         # 关闭该设备的旧连接
-        if current_user.id in connections:
-            if device_id in connections[current_user.id]:
-                old_queue = connections[current_user.id][device_id]
+        if user_id in connections:
+            if device_id in connections[user_id]:
+                old_queue = connections[user_id][device_id]
                 await old_queue.put(None)  # 发送关闭信号
 
         # 创建新连接
         queue = asyncio.Queue()
-        if current_user.id not in connections:
-            connections[current_user.id] = {}
-        connections[current_user.id][device_id] = queue
+        if user_id not in connections:
+            connections[user_id] = {}
+        connections[user_id][device_id] = queue
 
         async def event_generator():
             try:
@@ -1016,29 +1042,29 @@ async def sse_endpoint(token: str = None,
                         if data is None:  # 收到关闭信号
                             break
                         yield f"data: {json.dumps(data)}\n\n"
-                        print(f"发送给用户 {current_user.id} 的通知: {data}")
+                        print(f"发送给用户 {user_id} 的通知: {data}")
                     except Exception as e:
                         print(f"处理队列消息时发生错误: {str(e)}")
                         continue
             except asyncio.CancelledError:
-                print(f"用户 {current_user.id} 断开连接")
+                print(f"用户 {user_id} 断开连接")
                 # 清理连接
-                if current_user.id in connections:
-                    if device_id in connections[current_user.id]:
-                        del connections[current_user.id][device_id]
-                    if not connections[current_user.id]:
-                        del connections[current_user.id]
+                if user_id in connections:
+                    if device_id in connections[user_id]:
+                        del connections[user_id][device_id]
+                    if not connections[user_id]:
+                        del connections[user_id]
                 raise
             except Exception as e:
                 print(f"SSE连接发生错误: {str(e)}")
                 raise
             finally:
                 # 确保连接被清理
-                if current_user.id in connections:
-                    if device_id in connections[current_user.id]:
-                        del connections[current_user.id][device_id]
-                    if not connections[current_user.id]:
-                        del connections[current_user.id]
+                if user_id in connections:
+                    if device_id in connections[user_id]:
+                        del connections[user_id][device_id]
+                    if not connections[user_id]:
+                        del connections[user_id]
 
         return StreamingResponse(event_generator(),
                                  media_type="text/event-stream",
