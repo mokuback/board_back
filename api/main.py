@@ -71,7 +71,11 @@ app = FastAPI(
 # 配置 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源，生产环境应该指定具体域名
+    allow_origins=[
+        "http://localhost:5173",  # 本地開發環境
+        "http://152.69.197.71",  # Oracle Cloud Instance
+        "https://boardfront.vercel.app",  # Vercel 部署環境
+    ],
     allow_credentials=True,
     allow_methods=["*"],  # 允许所有方法
     allow_headers=["*"],  # 允许所有头部
