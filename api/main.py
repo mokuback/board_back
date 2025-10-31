@@ -74,6 +74,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",  # 本地開發環境
         "http://152.69.197.71",  # Oracle Cloud Instance
+        "https://152.69.197.71",  # Oracle Cloud Instance (HTTPS)
         "https://boardfront.vercel.app",  # Vercel 部署環境
     ],
     allow_credentials=True,
