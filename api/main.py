@@ -20,6 +20,7 @@ import json
 from app.connections import connections
 
 task_notify_service = None
+NO_LIFESPAN_ENVS = ["vercel", "development", "local"]
 
 
 # python 3.7 + 才支持************************************************
@@ -36,12 +37,17 @@ async def lifespan(app: FastAPI):
         task_notify_service.stop()
 
 
-app = FastAPI(
-    title="Message Board API",
-    description="A simple message board backend API",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app_kwargs = {
+    "title": "Message Board API",
+    "description": "A simple message board backend API",
+    "version": "1.0.0",
+}
+
+if Config.ENV not in NO_LIFESPAN_ENVS:
+    app_kwargs["lifespan"] = lifespan
+
+app = FastAPI(**app_kwargs)
+
 # ******************************************************************
 
 # app = FastAPI(
@@ -97,6 +103,7 @@ def check_config():
         "CLOUDINARY_API_KEY",
         "CLOUDINARY_API_SECRET",
         "TIMEZONE",
+        "ENV",
     ]
 
     missing_vars = [
@@ -537,6 +544,10 @@ async def update_notify_list(
         if not current_user.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="僅限管理員訪問")
+
+        if Config.ENV in NO_LIFESPAN_ENVS:
+            raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                                detail="当前环境不支持此操作")
 
         # 直接使用全局实例刷新通知列表
         await task_notify_service.refresh_notifies()
@@ -1097,10 +1108,14 @@ async def test_send_user(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="仅限管理员访问")
 
+        # if Config.ENV in NO_LIFESPAN_ENVS:
+        #     raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        #                         detail="当前环境不支持此操作")
+
         # 检查 task_notify_service 是否启动
-        if not task_notify_service or not task_notify_service._running:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="任务通知服务未启动")
+        # if not task_notify_service or not task_notify_service._running:
+        #     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+        #                         detail="任务通知服务未启动")
 
         # 从 JSON 数据中获取参数
         notify_id = data.get('notify_id')
@@ -1121,9 +1136,17 @@ async def test_send_user(
         data = {"message": message_data, "type": 'line_notify'}
 
         # 使用 task_notify_service 发送通知
-        await task_notify_service.send_to_user(user_id, data)
+        # await task_notify_service.send_to_user(user_id, data)
+        # 检查用户ID是否存在于connections字典中
+        if user_id in connections:  # 验证用户是否有活跃连接
+            # 遍历该用户的所有连接队列
+            # for queue in connections[user_id]:  # 对每个用户连接进行处理
+            for device_id, queue in connections[user_id].items():
+                print(f"向用户 ID: {user_id} (设备ID: {device_id})")
+                # 将数据异步放入队列
+                await queue.put(data)  # 使用异步方式将数据放入队列
 
-        return {"message": f"已向用户 {user_id} 发送 {data} 测试通知"}
+        return {"message": f"後端已向用户 {user_id} 发送 {data} SSE 测试通知"}
     except HTTPException:
         raise
     except Exception as e:
@@ -1140,6 +1163,10 @@ async def control_task_notify(
         if not current_user.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="仅限管理员访问")
+
+        if Config.ENV in NO_LIFESPAN_ENVS:
+            raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                                detail="当前环境不支持此操作")
 
         global task_notify_service
 

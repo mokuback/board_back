@@ -16,3 +16,4 @@ class Config:
     CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
     CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
     TIMEZONE = os.getenv("TIMEZONE")
+    ENV = os.getenv("ENV")
