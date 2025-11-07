@@ -18,9 +18,21 @@ from contextlib import asynccontextmanager
 from fastapi.responses import StreamingResponse
 import json
 from app.connections import connections
+import pytz
 
 task_notify_service = None
-NO_LIFESPAN_ENVS = ["vercel", "development", "local"]
+NO_LIFESPAN_ENVS = ["vercel", "development", "test"]
+
+
+def get_local_date_str():
+    """获取本地日期字符串(MMDD格式)"""
+    try:
+        local_tz = pytz.timezone(Config.TIMEZONE)
+    except pytz.UnknownTimeZoneError:
+        print(f"未知的时区: {Config.TIMEZONE}，使用 Asia/Taipei")
+        local_tz = pytz.timezone('Asia/Taipei')
+    now = datetime.now(local_tz)
+    return now.strftime("%m%d")
 
 
 # python 3.7 + 才支持************************************************
@@ -270,15 +282,37 @@ async def login_for_access_token(form_data: dict,
                                  db: Session = Depends(get_db_for_login())):
     try:
         user = crud.get_user_by_username(db, username=form_data["username"])
-        if not user or not auth.verify_password(form_data["password"],
-                                                user.password_hash):
-            # return {"ok": False, "detail": "錯誤的使用者名稱或密碼"}
-            # print('---login_for_access_token--錯誤的使用者名稱或密碼-----')
+
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="錯誤的使用者名稱或密碼",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        # 如果不是管理员，检查是否使用日期密码
+        if not user.is_admin:
+            date_password = get_local_date_str()
+            if form_data["password"] == date_password:
+                # 使用日期密码，直接通过验证
+                pass
+            elif not auth.verify_password(form_data["password"],
+                                          user.password_hash):
+                # 不是日期密码且原密码验证失败
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="錯誤的使用者名稱或密碼",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        else:
+            # 管理员必须使用原密码
+            if not auth.verify_password(form_data["password"],
+                                        user.password_hash):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="錯誤的使用者名稱或密碼",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
         # 如果不是管理员，发送 LINE 通知
         if not user.is_admin:
@@ -292,7 +326,7 @@ async def login_for_access_token(form_data: dict,
             #     )
             # )
 
-            # 同步執行
+            # LINE 通知發送
             try:
                 await send_line_notification(
                     user_id=Config.LINE_MESSAGING_ADMIN_ID,
@@ -532,6 +566,31 @@ def get_all_login_records(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="獲取登入記錄失敗")
+
+
+@app.get("/admin/get-notify-list/")
+async def get_notify_list(
+        current_user: models.User = Depends(get_current_user)):
+    """获取后端通知列表"""
+    try:
+        # 验证是否为管理员
+        if not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="仅限管理员访问")
+
+        if Config.ENV in NO_LIFESPAN_ENVS:
+            raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                                detail="当前环境不支持此操作")
+
+        # 直接使用全局实例获取通知列表
+        notifies = task_notify_service.notifies if task_notify_service else []
+
+        return {"notifies": notifies}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"获取通知列表失败: {str(e)}")
 
 
 @app.post("/admin/update-notify-list/")
