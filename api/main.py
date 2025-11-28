@@ -1334,7 +1334,7 @@ async def control_task_notify(
 @app.get("/api/health")
 def health_check():
     health_status = {
-        "status": "健康",
+        "status": "健康 Version: 1.0.2",
         "components": {
             "config": {
                 "status": "正常"
