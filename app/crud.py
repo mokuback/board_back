@@ -4,6 +4,7 @@ from passlib.context import CryptContext
 import cloudinary
 import cloudinary.uploader
 from .config import Config
+from .models import TaskNotify
 
 # 配置 Cloudinary
 cloudinary.config(cloud_name=Config.CLOUDINARY_CLOUD_NAME,
@@ -179,13 +180,18 @@ def delete_task_category(db: Session, category_id: int, user_id: int):
         models.TaskCategory.id == category_id,
         models.TaskCategory.user_id == user_id).first()
     if not db_category:
-        return None
+        return None, 0
+
+    # 在删除前，计算该分类相关的 task_notifies 数量
+    notifies_count = db.query(models.TaskNotify).filter(
+        models.TaskNotify.category_id == category_id,
+        models.TaskNotify.user_id == user_id).count()
 
     # 删除分类（由于设置了级联删除，关联的项目和进度也会自动删除）
     db.delete(db_category)
     db.commit()
 
-    return db_category
+    return db_category, notifies_count
 
 
 def create_task_item(db: Session, item: schemas.TaskItemCreate, user_id: int):
@@ -229,12 +235,18 @@ def delete_task_item(db: Session, item_id: int, user_id: int):
         models.TaskItem.id == item_id,
         models.TaskItem.user_id == user_id).first()
     if not db_item:
-        return None
+        return None, 0
+
+    # 在删除前，计算该项目相关的 task_notifies 数量
+    notifies_count = db.query(models.TaskNotify).filter(
+        models.TaskNotify.item_id == item_id,
+        models.TaskNotify.user_id == user_id).count()
+
     # 删除项目（由于设置了级联删除，关联的进度也会自动删除）
     db.delete(db_item)
     db.commit()
 
-    return db_item
+    return db_item, notifies_count
 
 
 def create_task_progress(db: Session, progress: schemas.TaskProgressCreate,
@@ -328,8 +340,10 @@ def get_progress_details(db: Session, category_id: int, item_id: int,
         return None
 
 
-def create_task_notify(db: Session, notify: schemas.TaskNotifyCreate,
-                       user_id: int):
+def create_task_notify(db: Session,
+                       notify: schemas.TaskNotifyCreate,
+                       user_id: int,
+                       task_notify_service: TaskNotify = None):
     """创建新的任务通知"""
     db_notify = models.TaskNotify(user_id=user_id,
                                   category_id=notify.category_id,
@@ -344,11 +358,31 @@ def create_task_notify(db: Session, notify: schemas.TaskNotifyCreate,
     db.add(db_notify)
     db.commit()
     db.refresh(db_notify)
+
+    # # 检查是否应该加载到内存
+    # if task_notify_service and task_notify_service.should_load_notify(
+    #         notify_dict):
+    #     task_notify_service.add_notify(notify_dict)
+
+    # 只要服務存在就加载到内存
+    # 因為task_notify_serviceo只在main執行時才自動初始化，如果在服務存在時不加入
+    # 會導致新增後的通知無法被執行(除非管理員在前端關閉又重新啟動，'🔔' : '🔕'，或者在管理員專用的選單中選擇重新讀取通知)
+    if task_notify_service:
+        # 获取用户信息
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        # 转换为字典格式
+        notify_dict = db_notify.__dict__.copy()
+        # 添加username属性
+        notify_dict['username'] = user.username if user else None
+        task_notify_service.add_notify(notify_dict)
     return db_notify
 
 
-def update_task_notify(db: Session, notify_id: int,
-                       notify: schemas.TaskNotifyUpdate, user_id: int):
+def update_task_notify(db: Session,
+                       notify_id: int,
+                       notify: schemas.TaskNotifyUpdate,
+                       user_id: int,
+                       task_notify_service: TaskNotify = None):
     """更新任务通知"""
     # 查找通知
     db_notify = db.query(models.TaskNotify).filter(
@@ -375,10 +409,23 @@ def update_task_notify(db: Session, notify_id: int,
 
     db.commit()
     db.refresh(db_notify)
+
+    if task_notify_service:
+        # 获取用户信息
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        # 转换为字典格式
+        notify_dict = db_notify.__dict__.copy()
+        # 添加username属性
+        notify_dict['username'] = user.username if user else None
+        task_notify_service.remove_notify(notify_dict['id'])
+        task_notify_service.add_notify(notify_dict)
     return db_notify
 
 
-def delete_task_notify(db: Session, notify_id: int, user_id: int):
+def delete_task_notify(db: Session,
+                       notify_id: int,
+                       user_id: int,
+                       task_notify_service: TaskNotify = None):
     """删除任务通知"""
     # 查找通知
     db_notify = db.query(models.TaskNotify).filter(
@@ -389,4 +436,43 @@ def delete_task_notify(db: Session, notify_id: int, user_id: int):
     # 删除通知
     db.delete(db_notify)
     db.commit()
+
+    if task_notify_service:
+        task_notify_service.remove_notify(notify_id)
+
     return db_notify
+
+
+def reset_last_executed(db: Session, user_id: int = None):
+    """重置最后执行时间"""
+    query = db.query(models.TaskNotify).filter(
+        models.TaskNotify.last_executed.isnot(None))
+
+    if user_id != 0:
+        query = query.filter(models.TaskNotify.user_id == user_id)
+
+    updated = query.update({'last_executed': None})
+    db.commit()
+    return updated
+
+
+def delete_notifies(db: Session, user_id: int):
+    """删除用户的所有通知"""
+    try:
+        # 如果 user_id 为 0，删除所有通知
+        if user_id == 0:
+            deleted_count = db.query(models.TaskNotify).count()
+            db.query(models.TaskNotify).delete()
+        else:
+            # 删除指定用户的通知
+            deleted_count = db.query(models.TaskNotify).filter(
+                models.TaskNotify.user_id == user_id).count()
+            db.query(models.TaskNotify).filter(
+                models.TaskNotify.user_id == user_id).delete()
+
+        db.commit()
+        return deleted_count
+    except Exception as e:
+        print(f"Error deleting notifies: {str(e)}")
+        db.rollback()
+        return 0

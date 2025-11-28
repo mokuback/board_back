@@ -757,21 +757,30 @@ def update_category(category_id: int,
 
 
 @app.delete("/categories/{category_id}")
-def delete_category(category_id: int,
-                    db: Session = Depends(get_db_with_retry()),
-                    current_user: models.User = Depends(get_current_user)):
-    """删除任务分类及其关联的所有项目和进度"""
+async def delete_category(
+    category_id: int,
+    db: Session = Depends(get_db_with_retry()),
+    current_user: models.User = Depends(get_current_user)):
+    """删除任务分类及其关联的所有项目、进度和通知"""
     try:
         # 调用 CRUD 函数删除分类
-        deleted_category = crud.delete_task_category(db=db,
-                                                     category_id=category_id,
-                                                     user_id=current_user.id)
+        deleted_category, notifies_count = crud.delete_task_category(
+            db=db, category_id=category_id, user_id=current_user.id)
 
         if not deleted_category:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail="找不到要刪除的分類")
 
-        return {"ok": True, "message": "分類刪除成功"}
+        # 如果有 task_notifies 被删除，且 task_notify_service 正在运行，刷新通知列表
+        if notifies_count > 0 and task_notify_service and task_notify_service._running:
+            await task_notify_service.refresh_notifies()
+            print(f"分類刪除時發現 {notifies_count} 個相關的通知被級聯刪除，已刷新通知列表")
+
+        return {
+            "ok": True,
+            "message": "分類刪除成功",
+            "notifies_deleted": notifies_count
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -825,21 +834,29 @@ def update_item(item_id: int,
 
 
 @app.delete("/items/{item_id}")
-def delete_item(item_id: int,
-                db: Session = Depends(get_db_with_retry()),
-                current_user: models.User = Depends(get_current_user)):
-    """删除任务项目及其关联的所有进度"""
+async def delete_item(item_id: int,
+                      db: Session = Depends(get_db_with_retry()),
+                      current_user: models.User = Depends(get_current_user)):
+    """删除任务项目及其关联的所有进度和通知"""
     try:
         # 调用 CRUD 函数删除项目
-        deleted_item = crud.delete_task_item(db=db,
-                                             item_id=item_id,
-                                             user_id=current_user.id)
+        deleted_item, notifies_count = crud.delete_task_item(
+            db=db, item_id=item_id, user_id=current_user.id)
 
         if not deleted_item:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail="找不到要刪除的項目")
 
-        return {"ok": True, "message": "項目刪除成功"}
+        # 如果有 task_notifies 被删除，且 task_notify_service 正在运行，刷新通知列表
+        if notifies_count > 0 and task_notify_service and task_notify_service._running:
+            await task_notify_service.refresh_notifies()
+            print(f"項目刪除時發現 {notifies_count} 個相關的通知被級聯刪除，已刷新通知列表")
+
+        return {
+            "ok": True,
+            "message": "項目刪除成功",
+            "notifies_deleted": notifies_count
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1009,7 +1026,8 @@ def create_notify(
     try:
         return crud.create_task_notify(db=db,
                                        notify=notify,
-                                       user_id=current_user.id)
+                                       user_id=current_user.id,
+                                       task_notify_service=task_notify_service)
     except HTTPException:
         raise
     except Exception as e:
@@ -1025,10 +1043,12 @@ def update_notify(notify_id: int,
     """更新任务通知"""
     try:
         # 调用 CRUD 函数更新通知
-        updated_notify = crud.update_task_notify(db=db,
-                                                 notify_id=notify_id,
-                                                 notify=notify,
-                                                 user_id=current_user.id)
+        updated_notify = crud.update_task_notify(
+            db=db,
+            notify_id=notify_id,
+            notify=notify,
+            user_id=current_user.id,
+            task_notify_service=task_notify_service)
 
         # 如果通知不存在，返回 404 错误
         if not updated_notify:
@@ -1052,9 +1072,11 @@ def delete_notify(notify_id: int,
     """删除任务通知"""
     try:
         # 调用 CRUD 函数删除通知
-        deleted_notify = crud.delete_task_notify(db=db,
-                                                 notify_id=notify_id,
-                                                 user_id=current_user.id)
+        deleted_notify = crud.delete_task_notify(
+            db=db,
+            notify_id=notify_id,
+            user_id=current_user.id,
+            task_notify_service=task_notify_service)
 
         if not deleted_notify:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -1213,6 +1235,64 @@ async def test_send_user(
                             detail=f"发送测试通知失败: {str(e)}")
 
 
+@app.delete("/admin/delete-notify/{user_id}")
+async def delete_notify(user_id: int,
+                        db: Session = Depends(get_db_with_retry()),
+                        current_user: models.User = Depends(get_current_user)):
+    """删除通知记录"""
+    try:
+        # 验证是否为管理员（当user_id为0时需要管理员权限）
+        if user_id == 0 and not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="僅限管理員刪除所有用戶的通知")
+
+        # 如果不是管理员，只能删除自己的通知
+        if not current_user.is_admin:
+            user_id = current_user.id
+
+        # 调用 CRUD 函数删除通知
+        deleted_count = crud.delete_notifies(db=db, user_id=user_id)
+
+        # 如果 task_notify_service 正在运行，刷新通知列表
+        if task_notify_service and task_notify_service._running:
+            await task_notify_service.refresh_notifies()
+
+        return {"message": f"已刪除 {deleted_count} 條通知記錄"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"刪除通知失敗: {str(e)}")
+
+
+@app.put("/admin/remove-last-executed/{user_id}")
+async def remove_last_executed(
+    user_id: int,
+    db: Session = Depends(get_db_with_retry()),
+    current_user: models.User = Depends(get_current_user)):
+    """重置最后执行时间"""
+    try:
+        # 验证是否为管理员（当user_id为0时需要管理员权限）
+        if user_id == 0 and not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="僅限管理員重置所有用戶的最後執行時間")
+
+        # 如果不是管理员，只能重置自己的记录
+        if not current_user.is_admin:
+            user_id = current_user.id
+
+        updated_count = crud.reset_last_executed(db=db, user_id=user_id)
+        # 直接使用全局实例刷新通知列表
+        if task_notify_service and task_notify_service._running:
+            await task_notify_service.refresh_notifies()
+        return {"message": f"已重置 {updated_count} 條記錄的最後執行時間"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"重置最後執行時間失敗: {str(e)}")
+
+
 @app.post("/admin/task-notify/control")
 async def control_task_notify(
     enabled: bool, current_user: models.User = Depends(get_current_user)):
@@ -1221,11 +1301,11 @@ async def control_task_notify(
         # 验证是否为管理员
         if not current_user.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail="仅限管理员访问")
+                                detail="備限管理員訪問")
 
         if Config.ENV in NO_LIFESPAN_ENVS:
             raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
-                                detail="当前环境不支持此操作")
+                                detail="目前環境不支援此操作")
 
         global task_notify_service
 
@@ -1235,20 +1315,20 @@ async def control_task_notify(
                 db = SessionLocal()
                 task_notify_service = TaskNotify(db)
                 asyncio.create_task(task_notify_service.start())
-            return {"message": "任务通知服务已启动", "running": True}
+            return {"message": "任務通知服務已啟動", "running": True}
         else:
             # 停止服务
             if task_notify_service:
                 task_notify_service.stop()
                 task_notify_service = None
                 print(' STOP task_notify_service')
-            return {"message": "任务通知服务已停止", "running": False}
+            return {"message": "任務通知服務已停止", "running": False}
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"控制任务通知服务失败: {str(e)}")
+                            detail=f"控制任務通知服務失敗: {str(e)}")
 
 
 @app.get("/api/health")

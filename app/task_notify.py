@@ -78,28 +78,151 @@ class TaskNotify:
         self.notifies: List[Dict] = []  # 存储通知记录的列表
         self._running = False  # 运行状态标志
 
+    def should_execute_notify(self, notify: Dict, now: datetime,
+                              current_time: time, current_week: int) -> bool:
+        """
+        检查通知是否应该执行
+        
+        Args:
+            notify: 通知记录字典
+            now: 当前UTC时间
+            current_time: 当前本地时间
+            current_week: 当前星期(1-7)
+        
+        Returns:
+            bool: 是否应该执行通知
+        """
+        try:
+            utc_time_at = self.local_time_to_utc(notify['time_at'])
+            print(f"\n检查通知 ID: {notify['id']}")
+
+            # 单次执行模式
+            if notify['run_mode'] == 0:
+                print(f"通知 ID: {notify['id']} run_mode 为 0")
+                print(f"当前时间: {now}")
+                print(f"开始时间: {notify['start_at']}")
+                print(f"时间比较: {now >= notify['start_at']}")
+                return now >= notify['start_at']
+
+            # 检查是否超过停止时间
+            if now >= notify['stop_at']:
+                print(f"通知 ID: {notify['id']} run_mode 为 1 或 2")
+                print(f"通知 ID: {notify['id']} 已超过停止时间")
+                self.notifies.remove(notify)
+                return False
+
+            # 重复执行模式 - 每天
+            if notify['run_mode'] == 1:
+                print(f"通知 ID: {notify['id']} run_mode 为 1")
+                print(f"通知 ID: {notify['id']} 未过停止时间，继续检查")
+                print(f"当前时间: {now}")
+                print(f"开始时间: {notify['start_at']}")
+                print(f"时间比较: {now >= notify['start_at']}")
+                print(f"執行時間: {notify['time_at']}")
+                return (now >= notify['start_at']
+                        and utc_time_at >= notify['start_at']
+                        and current_time >= notify['time_at']
+                        and (not notify['last_executed']
+                             or now.date() > notify['last_executed'].date()))
+
+            # 重复执行模式 - 每周
+            if notify['run_mode'] == 2:
+                print(f"通知 ID: {notify['id']} run_mode 为 2")
+                print(f"通知 ID: {notify['id']} 未过停止时间，继续检查")
+                print(f"当前星期: {current_week}")
+                print(f"開始星期: {notify['week_at']}")
+                print(
+                    f"星期比较: {current_week in [int(d) for d in str(notify['week_at'])]}"
+                )
+                print(f"当前时间: {now}")
+                print(f"开始时间: {notify['start_at']}")
+                print(f"时间比较: {now >= notify['start_at']}")
+                print(f"執行時間: {notify['time_at']}")
+                return (now >= notify['start_at']
+                        and utc_time_at >= notify['start_at'] and current_week
+                        in [int(d) for d in str(notify['week_at'])]
+                        and current_time >= notify['time_at']
+                        and (not notify['last_executed']
+                             or now.date() > notify['last_executed'].date()))
+
+            return False
+        except Exception as e:
+            print(f"检查通知 {notify['id']} 时出错: {str(e)}")
+            return False
+
+    def should_load_notify(self, notify: Dict) -> bool:
+        """
+        检查通知是否符合加载条件(注意此加載邏輯須要與load_notifies裡的數據邏輯一致)
+        
+        Args:
+            notify: 通知记录字典
+        
+        Returns:
+            bool: 是否应该加载该通知
+        """
+        now = datetime.now(self.TIMEZONE)
+        #########################################################################
+        # 批次定時加載時專用(系統仍需定時執行load_notifies)
+        #########################################################################
+        # early_time = now - timedelta(minutes=10)
+        # late_time = now + timedelta(minutes=10)
+
+        # # 单次执行模式检查
+        # if notify['run_mode'] == 0:
+        #     return (notify['start_at'] > early_time
+        #             and notify['last_executed'] is None)
+
+        # # 重复执行模式检查
+        # if notify['run_mode'] in [1, 2]:
+        #     return (notify['start_at'] <= late_time
+        #             and notify['stop_at'] > early_time)
+        #########################################################################
+        # 一次性加載模式：加載未執行過的通知
+        # 单次执行模式：未执行过的加载
+        if notify['run_mode'] == 0:
+            return notify['last_executed'] is None
+
+        # 重复执行模式：未过停止时间的加载
+        if notify['run_mode'] in [1, 2]:
+            return notify['stop_at'] > now
+
+        return False
+
     async def load_notifies(self):
         """加载符合条件的通知记录"""
         print("\n=== 开始加载通知 ===")
         now = datetime.now(self.TIMEZONE)
         print(f"当前时间: {now}")
 
+        #########################################################################
+        # 批次定時加載時專用(系統仍需定時執行load_notifies)
+        #########################################################################
         # 提前10分钟和延后10分钟的时间点
-        early_time = now - timedelta(minutes=10)
-        late_time = now + timedelta(minutes=10)
+        # early_time = now - timedelta(minutes=10)
+        # late_time = now + timedelta(minutes=10)
 
         # 查询通知记录并关联用户表
-        notifies = self.db.query(models.TaskNotify, models.User.username).join(
-            models.User, models.TaskNotify.user_id == models.User.id).filter(
-                # 单次执行模式：加载开始时间在10分钟内的通知(單次已有執行過通知的不加载)
-                (models.TaskNotify.run_mode == 0)
-                & (models.TaskNotify.start_at > early_time)
-                & (models.TaskNotify.last_executed.is_(None))
-                |
-                # 重复执行模式：加载时间范围扩大10分钟的通知
-                (models.TaskNotify.run_mode.in_([1, 2]))
-                & (models.TaskNotify.start_at <= late_time)
-                & (models.TaskNotify.stop_at > early_time)).all()
+        # notifies = self.db.query(models.TaskNotify, models.User.username).join(
+        #     models.User, models.TaskNotify.user_id == models.User.id).filter(
+        #         # 单次执行模式：加载开始时间在10分钟内的通知(單次已有執行過通知的不加载)
+        #         (models.TaskNotify.run_mode == 0)
+        #         & (models.TaskNotify.start_at > early_time)
+        #         & (models.TaskNotify.last_executed.is_(None))
+        #         |
+        #         # 重复执行模式：加载时间范围扩大10分钟的通知
+        #         (models.TaskNotify.run_mode.in_([1, 2]))
+        #         & (models.TaskNotify.start_at <= late_time)
+        #         & (models.TaskNotify.stop_at > early_time)).all()
+        #########################################################################
+        # 一次性加載模式：加載未執行過的通知
+        notifies = (self.db.query(
+            models.TaskNotify, models.User.username).join(
+                models.User,
+                models.TaskNotify.user_id == models.User.id).filter(
+                    ((models.TaskNotify.run_mode == 0)
+                     & (models.TaskNotify.last_executed.is_(None)))
+                    | ((models.TaskNotify.run_mode.in_([1, 2]))
+                       & (models.TaskNotify.stop_at > now))).all())
 
         # 转换为字典格式并添加username字段
         self.notifies = []
@@ -122,70 +245,72 @@ class TaskNotify:
 
         for notify in self.notifies[:]:  # 创建副本以便安全删除
             try:
-                utc_time_at = self.local_time_to_utc(notify['time_at'])
-                print(f"\n检查通知 ID: {notify['id']}")
-                # print(f"通知详情: {notify}")
+                should_execute = self.should_execute_notify(
+                    notify, now, current_time, current_week)
+                # utc_time_at = self.local_time_to_utc(notify['time_at'])
+                # print(f"\n检查通知 ID: {notify['id']}")
+                # # print(f"通知详情: {notify}")
 
-                # 检查执行条件
-                should_execute = False
+                # # 检查执行条件
+                # should_execute = False
 
-                # 单次执行模式
-                if notify['run_mode'] == 0:
-                    print(f"通知 ID: {notify['id']} run_mode 为 0")
-                    print(f"当前时间: {now}")
-                    print(f"开始时间: {notify['start_at']}")
-                    print(f"时间比较: {now >= notify['start_at']}")
+                # # 单次执行模式
+                # if notify['run_mode'] == 0:
+                #     print(f"通知 ID: {notify['id']} run_mode 为 0")
+                #     print(f"当前时间: {now}")
+                #     print(f"开始时间: {notify['start_at']}")
+                #     print(f"时间比较: {now >= notify['start_at']}")
 
-                    # 只检查开始时间
-                    if now >= notify['start_at']:
-                        print(f"通知 ID: {notify['id']} 时间已到，准备执行")
-                        should_execute = True
-                    else:
-                        print(f"通知 ID: {notify['id']} 时间未到")
-                        print(f"通知 ID: {notify['id']} 跳过后续检查")
-                        continue
+                #     # 只检查开始时间
+                #     if now >= notify['start_at']:
+                #         print(f"通知 ID: {notify['id']} 时间已到，准备执行")
+                #         should_execute = True
+                #     else:
+                #         print(f"通知 ID: {notify['id']} 时间未到")
+                #         print(f"通知 ID: {notify['id']} 跳过后续检查")
+                #         continue
 
-                # 检查是否超过停止时间
-                elif now >= notify['stop_at']:
-                    print(f"通知 ID: {notify['id']} run_mode 为 1 或 2")
-                    print(f"通知 ID: {notify['id']} 已超过停止时间，移除")
-                    self.notifies.remove(notify)
-                    continue
-                elif notify['run_mode'] == 1:
-                    print(f"通知 ID: {notify['id']} run_mode 为 1")
-                    print(f"通知 ID: {notify['id']} 未过停止时间，继续检查")
-                    print(f"当前时间: {now}")
-                    print(f"开始时间: {notify['start_at']}")
-                    print(f"时间比较: {now >= notify['start_at']}")
-                    print(f"執行時間: {notify['time_at']}")
-                    if (now >= notify['start_at']
-                            and utc_time_at >= notify['start_at']
-                            and current_time >= notify['time_at'] and
-                        (not notify['last_executed']
-                         or now.date() > notify['last_executed'].date())):
-                        print(f"通知 ID: {notify['id']} 时间已到，准备执行")
-                        should_execute = True
-                elif notify['run_mode'] == 2:
-                    print(f"通知 ID: {notify['id']} run_mode 为 2")
-                    print(f"通知 ID: {notify['id']} 未过停止时间，继续检查")
-                    print(f"当前星期: {current_week}")
-                    print(f"開始星期: {notify['week_at']}")
-                    print(
-                        f"星期比较: {current_week in [int(d) for d in str(notify['week_at'])]}"
-                    )
-                    print(f"当前时间: {now}")
-                    print(f"开始时间: {notify['start_at']}")
-                    print(f"时间比较: {now >= notify['start_at']}")
-                    print(f"執行時間: {notify['time_at']}")
-                    if (now >= notify['start_at']
-                            and utc_time_at >= notify['start_at']
-                            and current_week in
-                        [int(d) for d in str(notify['week_at'])
-                         ]  # and str(current_week) in str(notify['week_at'])
-                            and current_time >= notify['time_at'] and
-                        (not notify['last_executed']
-                         or now.date() > notify['last_executed'].date())):
-                        should_execute = True
+                # # 检查是否超过停止时间
+                # elif now >= notify['stop_at']:
+                #     print(f"通知 ID: {notify['id']} run_mode 为 1 或 2")
+                #     print(f"通知 ID: {notify['id']} 已超过停止时间，移除")
+                #     self.notifies.remove(notify)
+                #     continue
+                # elif notify['run_mode'] == 1:
+                #     print(f"通知 ID: {notify['id']} run_mode 为 1")
+                #     print(f"通知 ID: {notify['id']} 未过停止时间，继续检查")
+                #     print(f"当前时间: {now}")
+                #     print(f"开始时间: {notify['start_at']}")
+                #     print(f"时间比较: {now >= notify['start_at']}")
+                #     print(f"執行時間: {notify['time_at']}")
+                #     if (now >= notify['start_at']
+                #             and utc_time_at >= notify['start_at']
+                #             and current_time >= notify['time_at'] and
+                #         (not notify['last_executed']
+                #          or now.date() > notify['last_executed'].date())):
+                #         print(f"通知 ID: {notify['id']} 时间已到，准备执行")
+                #         should_execute = True
+                # elif notify['run_mode'] == 2:
+                #     print(f"通知 ID: {notify['id']} run_mode 为 2")
+                #     print(f"通知 ID: {notify['id']} 未过停止时间，继续检查")
+                #     print(f"当前星期: {current_week}")
+                #     print(f"開始星期: {notify['week_at']}")
+                #     print(
+                #         f"星期比较: {current_week in [int(d) for d in str(notify['week_at'])]}"
+                #     )
+                #     print(f"当前时间: {now}")
+                #     print(f"开始时间: {notify['start_at']}")
+                #     print(f"时间比较: {now >= notify['start_at']}")
+                #     print(f"執行時間: {notify['time_at']}")
+                #     if (now >= notify['start_at']
+                #             and utc_time_at >= notify['start_at']
+                #             and current_week in
+                #         [int(d) for d in str(notify['week_at'])
+                #          ]  # and str(current_week) in str(notify['week_at'])
+                #             and current_time >= notify['time_at'] and
+                #         (not notify['last_executed']
+                #          or now.date() > notify['last_executed'].date())):
+                #         should_execute = True
 
                 print(f"当前通知数量: {len(self.notifies)}")
                 if should_execute:
@@ -292,8 +417,6 @@ class TaskNotify:
     async def refresh_notifies(self):
         """手动刷新通知列表"""
         try:
-            # 确保回滚任何未完成的事务
-            self.db.rollback()
             await self.load_notifies()
         except Exception as e:
             print(f"刷新通知列表失败: {str(e)}")
